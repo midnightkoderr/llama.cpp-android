@@ -26,19 +26,19 @@ curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/ma
 Then put the binaries on `PATH`:
 
 ```bash
-echo 'export PATH=${HOME}/llama.cpp/bin:${PATH}' >> ~/.bashrc
+echo 'export PATH="${HOME}/llama.cpp/bin:${PATH}"' >> ~/.bashrc
 ```
 
 Point the loader at the libraries:
 
 ```bash
-echo 'export LD_LIBRARY_PATH=/vendor/lib64:${HOME}/llama.cpp/lib' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH="/vendor/lib64:${HOME}/llama.cpp/lib:${LD_LIBRARY_PATH:-}"' >> ~/.bashrc
 ```
 
 Hexagon only — let FastRPC find the NPU kernel libs:
 
 ```bash
-echo 'export ADSP_LIBRARY_PATH=${HOME}/llama.cpp/lib' >> ~/.bashrc
+echo 'export ADSP_LIBRARY_PATH="${HOME}/llama.cpp/lib"' >> ~/.bashrc
 ```
 
 Reload:
