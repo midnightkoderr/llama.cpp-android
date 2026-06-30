@@ -173,9 +173,9 @@ cat <<EOF
 Add to ~/.bashrc (PATH for the binaries, plus the library paths —
 ADSP_LIBRARY_PATH lets FastRPC find the HTP kernels):
 
-  echo 'export PATH=${INSTALL_DIR}:\${PATH}'                  >> ~/.bashrc
-  echo 'export LD_LIBRARY_PATH=${LIB_DIR}:\${LD_LIBRARY_PATH}' >> ~/.bashrc
-  echo 'export ADSP_LIBRARY_PATH=${LIB_DIR}'                  >> ~/.bashrc
+  echo 'export PATH="${INSTALL_DIR}:\${PATH}"' >> ~/.bashrc
+  echo 'export LD_LIBRARY_PATH="/vendor/lib64:${LIB_DIR}:${LD_LIBRARY_PATH:-}"' >> ~/.bashrc
+  echo 'export ADSP_LIBRARY_PATH="${LIB_DIR}"'                  >> ~/.bashrc
   source ~/.bashrc
 
 ── NPU (Hexagon HTP) ────────────────────────────────────
@@ -203,8 +203,8 @@ cat <<EOF
 
 Add to ~/.bashrc (PATH for the binaries + library path for libomp.so):
 
-  echo 'export PATH=${INSTALL_DIR}:\${PATH}'                  >> ~/.bashrc
-  echo 'export LD_LIBRARY_PATH=${LIB_DIR}:\${LD_LIBRARY_PATH}' >> ~/.bashrc
+  echo 'export PATH="${INSTALL_DIR}:\${PATH}"' >> ~/.bashrc
+  echo 'export LD_LIBRARY_PATH="/vendor/lib64:${LIB_DIR}:${LD_LIBRARY_PATH:-}"' >> ~/.bashrc
   source ~/.bashrc
 
 ── CPU only ─────────────────────────────────────────────
