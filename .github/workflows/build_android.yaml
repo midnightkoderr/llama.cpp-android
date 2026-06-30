@@ -1,0 +1,330 @@
+name: Build llama.cpp Android (OpenCL + Hexagon)
+
+on:
+  schedule:
+    - cron: '30 12 * * 5' # Friday 12:30 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'llama.cpp tag/branch to build (blank = latest upstream release)'
+        required: false
+        default: ''
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # OpenCL build
+  NDK_REVISION: r26d # 26.3.11579264
+  ANDROID_API: '34'
+  ANDROID_ABI: arm64-v8a
+  # Hexagon build — Qualcomm toolchain image (NDK + OpenCL SDK + Hexagon SDK + tools)
+  TOOLCHAIN_IMAGE: ghcr.io/snapdragon-toolchain/arm64-android:v0.7
+
+jobs:
+  # ── shared upstream-version gate ──────────────────────────────────────────
+  check:
+    name: Check upstream version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      upstream_date: ${{ steps.check.outputs.upstream_date }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Compare upstream vs current release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ github.event.inputs.ref }}
+        run: |
+          if [[ -n "$INPUT_REF" ]]; then
+            # Manual override — always build the requested ref.
+            echo "tag=$INPUT_REF"       >> $GITHUB_OUTPUT
+            echo "upstream_date=manual" >> $GITHUB_OUTPUT
+            echo "skip=false"           >> $GITHUB_OUTPUT
+            echo "Manual build of ref: $INPUT_REF"
+            exit 0
+          fi
+
+          upstream_tag=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.tag_name')
+          upstream_date=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.published_at')
+          # Gracefully handle no releases yet in this repo (first run)
+          current_tag=$(gh api repos/${{ github.repository }}/releases/latest \
+                          --jq '.tag_name' 2>/dev/null || echo "none")
+
+          echo "tag=$upstream_tag"            >> $GITHUB_OUTPUT
+          echo "upstream_date=$upstream_date" >> $GITHUB_OUTPUT
+
+          echo "Upstream : $upstream_tag ($upstream_date)"
+          echo "Current  : $current_tag"
+
+          if [[ "$upstream_tag" == "$current_tag" ]]; then
+            echo "skip=true"  >> $GITHUB_OUTPUT
+            echo "Already at $upstream_tag — skipping build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "New version detected: $upstream_tag"
+          fi
+
+  # ── OpenCL (Adreno GPU) build ─────────────────────────────────────────────
+  opencl:
+    name: arm64-v8a · OpenCL GPU
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    env:
+      LLAMACPP_TAG: ${{ needs.check.outputs.tag }}
+    outputs:
+      sha256: ${{ steps.meta.outputs.sha256 }}
+      ocl_headers_commit: ${{ steps.meta.outputs.ocl_headers_commit }}
+      ocl_icd_commit: ${{ steps.meta.outputs.ocl_icd_commit }}
+      cmake_ver: ${{ steps.meta.outputs.cmake_ver }}
+      ninja_ver: ${{ steps.meta.outputs.ninja_ver }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build git
+
+      - name: Set up Android NDK ${{ env.NDK_REVISION }}
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: ${{ env.NDK_REVISION }}
+          add-to-path: false
+
+      - name: Get ISO week
+        id: week
+        run: echo "key=$(date +%Y-W%V)" >> $GITHUB_OUTPUT
+
+      # Pre-clone at the exact upstream tag so build.sh skips its own clone.
+      # opencl-gpu/build.sh uses SRC_DIR=$PWD/llama.cpp (repo root).
+      - name: Clone llama.cpp at ${{ env.LLAMACPP_TAG }}
+        run: |
+          git clone --depth 1 --branch "$LLAMACPP_TAG" \
+            https://github.com/ggml-org/llama.cpp.git llama.cpp
+
+      - name: Restore OpenCL deps cache
+        uses: actions/cache@v4
+        with:
+          path: llama.cpp/opencl-install
+          key: opencl-android-${{ env.ANDROID_ABI }}-api${{ env.ANDROID_API }}-${{ steps.week.outputs.key }}
+          restore-keys: |
+            opencl-android-${{ env.ANDROID_ABI }}-api${{ env.ANDROID_API }}-
+
+      - name: Build llama.cpp (OpenCL GPU)
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./opencl-gpu/build.sh --opencl
+
+      - name: Clean up opencl-build temp files
+        run: rm -rf llama.cpp/opencl-build
+
+      - name: Pack release archive
+        run: |
+          tar -C llama.cpp/android-bin \
+            -czf "llama-android-arm64-opencl-${LLAMACPP_TAG}.tar.gz" .
+          sha256sum "llama-android-arm64-opencl-${LLAMACPP_TAG}.tar.gz" \
+            > "llama-android-arm64-opencl-${LLAMACPP_TAG}.tar.gz.sha256"
+
+      - name: Collect build metadata
+        id: meta
+        run: |
+          ocl_headers_commit=$(git -C llama.cpp/opencl-build/OpenCL-Headers  rev-parse --short HEAD 2>/dev/null || echo "cached")
+          ocl_icd_commit=$(git    -C llama.cpp/opencl-build/OpenCL-ICD-Loader rev-parse --short HEAD 2>/dev/null || echo "cached")
+          cmake_ver=$(cmake --version | head -n1 | awk '{print $3}')
+          ninja_ver=$(ninja --version)
+          sha256=$(awk '{print $1}' "llama-android-arm64-opencl-${LLAMACPP_TAG}.tar.gz.sha256")
+          echo "ocl_headers_commit=$ocl_headers_commit" >> $GITHUB_OUTPUT
+          echo "ocl_icd_commit=$ocl_icd_commit"         >> $GITHUB_OUTPUT
+          echo "cmake_ver=$cmake_ver"                   >> $GITHUB_OUTPUT
+          echo "ninja_ver=$ninja_ver"                   >> $GITHUB_OUTPUT
+          echo "sha256=$sha256"                         >> $GITHUB_OUTPUT
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-arm64-opencl-${{ env.LLAMACPP_TAG }}
+          path: llama.cpp/android-bin/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-opencl
+          path: llama-android-arm64-opencl-${{ env.LLAMACPP_TAG }}.tar.gz*
+          retention-days: 7
+          if-no-files-found: error
+
+  # ── Hexagon NPU (HTP) build ───────────────────────────────────────────────
+  hexagon:
+    name: arm64-v8a · Hexagon NPU
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    env:
+      LLAMACPP_TAG: ${{ needs.check.outputs.tag }}
+    outputs:
+      sha256: ${{ steps.meta.outputs.sha256 }}
+      htp: ${{ steps.meta.outputs.htp }}
+      cmake_ver: ${{ steps.meta.outputs.cmake_ver }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The toolchain image + build output is large; reclaim runner disk first.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Pull toolchain image
+        run: docker pull --platform linux/amd64 "$TOOLCHAIN_IMAGE"
+
+      # hexagon-npu/build.sh clones llama.cpp into hexagon-npu/llama.cpp, runs
+      # the cmake snapdragon preset inside the container, strips, and writes
+      # hexagon-npu/llama-android-arm64-hexagon-<tag>.tar.gz(+.sha256).
+      - name: Build (CPU + OpenCL + Hexagon)
+        run: ./hexagon-npu/build.sh --tag "$LLAMACPP_TAG"
+
+      - name: Collect build metadata
+        id: meta
+        run: |
+          pkg=hexagon-npu/llama.cpp/pkg-snapdragon/llama.cpp
+          cmake_ver=$(docker run --rm --platform linux/amd64 "$TOOLCHAIN_IMAGE" cmake --version | head -n1 | awk '{print $3}')
+          sha256=$(awk '{print $1}' "hexagon-npu/llama-android-arm64-hexagon-${LLAMACPP_TAG}.tar.gz.sha256")
+          htp=$(ls -1 "$pkg/lib/" | grep 'libggml-htp-' | sed 's/libggml-htp-//;s/\.so//' | paste -sd', ')
+          echo "cmake_ver=$cmake_ver" >> $GITHUB_OUTPUT
+          echo "sha256=$sha256"       >> $GITHUB_OUTPUT
+          echo "htp=$htp"             >> $GITHUB_OUTPUT
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-arm64-hexagon-${{ env.LLAMACPP_TAG }}
+          path: hexagon-npu/llama.cpp/pkg-snapdragon/llama.cpp/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-hexagon
+          path: hexagon-npu/llama-android-arm64-hexagon-${{ env.LLAMACPP_TAG }}.tar.gz*
+          retention-days: 7
+          if-no-files-found: error
+
+  # ── single combined release ───────────────────────────────────────────────
+  release:
+    name: Publish release
+    needs: [check, opencl, hexagon]
+    # Run if at least one build succeeded, so a failure in the heavier Hexagon
+    # build never blocks shipping the OpenCL artifact (and vice-versa).
+    if: >-
+      always() && needs.check.outputs.skip != 'true' &&
+      (needs.opencl.result == 'success' || needs.hexagon.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download OpenCL release files
+        if: needs.opencl.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-opencl
+          path: dist
+
+      - name: Download Hexagon release files
+        if: needs.hexagon.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-hexagon
+          path: dist
+
+      - name: Assemble release notes
+        id: notes
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+          UPSTREAM_DATE: ${{ needs.check.outputs.upstream_date }}
+          OPENCL_RESULT: ${{ needs.opencl.result }}
+          HEXAGON_RESULT: ${{ needs.hexagon.result }}
+          OCL_SHA: ${{ needs.opencl.outputs.sha256 }}
+          OCL_HEADERS: ${{ needs.opencl.outputs.ocl_headers_commit }}
+          OCL_ICD: ${{ needs.opencl.outputs.ocl_icd_commit }}
+          OCL_CMAKE: ${{ needs.opencl.outputs.cmake_ver }}
+          OCL_NINJA: ${{ needs.opencl.outputs.ninja_ver }}
+          HEX_SHA: ${{ needs.hexagon.outputs.sha256 }}
+          HEX_HTP: ${{ needs.hexagon.outputs.htp }}
+          HEX_CMAKE: ${{ needs.hexagon.outputs.cmake_ver }}
+        run: |
+          f=release_body.md
+          {
+            echo "Built from [llama.cpp ${TAG}](https://github.com/ggml-org/llama.cpp/releases/tag/${TAG})"
+            echo "Upstream released: ${UPSTREAM_DATE}"
+            echo
+            echo "Two flavours share this release — download the archive matching your backend."
+            echo
+
+            if [ "$OPENCL_RESULT" = "success" ]; then
+              echo "## OpenCL (Adreno GPU)"
+              echo "\`llama-android-arm64-opencl-${TAG}.tar.gz\`"
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| ABI | arm64-v8a (Android API ${ANDROID_API}) |"
+              echo "| Arch flags | ARMv8.6-a + I8MM + BF16 + DotProd |"
+              echo "| Backend | OpenCL (Adreno GPU) |"
+              echo "| NDK | ${NDK_REVISION} (26.3.11579264) |"
+              echo "| OpenCL-Headers | \`${OCL_HEADERS}\` |"
+              echo "| OpenCL-ICD-Loader | \`${OCL_ICD}\` |"
+              echo "| CMake / Ninja | ${OCL_CMAKE} / ${OCL_NINJA} |"
+              echo
+            fi
+
+            if [ "$HEXAGON_RESULT" = "success" ]; then
+              echo "## Hexagon NPU (HTP)"
+              echo "\`llama-android-arm64-hexagon-${TAG}.tar.gz\`"
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| ABI | arm64-v8a (Android API 31+) |"
+              echo "| Backends | CPU + OpenCL + **Hexagon NPU (HTP)** |"
+              echo "| Hexagon kernel libs | ${HEX_HTP} |"
+              echo "| Snapdragon 8 Gen 3 (SM8650) | Hexagon **v75** |"
+              echo "| Snapdragon 7+ Gen 3 (SM7675) | Hexagon **v73** |"
+              echo "| Toolchain image | \`${TOOLCHAIN_IMAGE}\` |"
+              echo "| CMake | ${HEX_CMAKE} |"
+              echo
+              echo "Ships every HTP version; the right one is picked at runtime, so the same archive runs on both SoCs."
+              echo
+              echo "\`\`\`"
+              echo "export LD_LIBRARY_PATH=./lib"
+              echo "export ADSP_LIBRARY_PATH=./lib"
+              echo "./bin/llama-cli -m model-Q4_0.gguf --device HTP0 -ngl 99 -p \"hi\""
+              echo "\`\`\`"
+              echo
+            fi
+
+            echo "### Checksums"
+            echo '```'
+            cat dist/*.sha256 2>/dev/null || true
+            echo '```'
+          } > "$f"
+          echo "path=$f" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: 'llama.cpp ${{ needs.check.outputs.tag }} · Android arm64 (OpenCL + Hexagon)'
+          body_path: ${{ steps.notes.outputs.path }}
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          generate_release_notes: false
