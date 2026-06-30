@@ -32,7 +32,7 @@ echo 'export PATH=${HOME}/llama.cpp/bin:${PATH}' >> ~/.bashrc
 Point the loader at the libraries:
 
 ```bash
-echo 'export LD_LIBRARY_PATH=${HOME}/llama.cpp/lib:${LD_LIBRARY_PATH}' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/vendor/lib64:${HOME}/llama.cpp/lib' >> ~/.bashrc
 ```
 
 Hexagon only — let FastRPC find the NPU kernel libs:
