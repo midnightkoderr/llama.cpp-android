@@ -29,9 +29,15 @@ PRESET="arm64-android-snapdragon-release"
 LLAMACPP_TAG="${LLAMACPP_TAG:-}"   # empty = default branch (master)
 JOBS="$(nproc)"
 DO_STRIP=1
+PRUNE=1
 CLEAN=0
 CLEAN_ALL=0
 PULL=0
+
+# Runtime binaries to keep in the package; everything else (other tools,
+# headers, cmake/pkgconfig, leftover test binaries) is pruned. The required
+# .so closure is derived automatically from this list.
+KEEP_BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split)
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
@@ -45,6 +51,7 @@ Usage: $0 [options]
   --image <ref>    Toolchain Docker image (default: $IMAGE)
   --jobs <n>       Parallel build jobs (default: nproc = $JOBS)
   --no-strip       Keep symbols (do not strip the output libraries/binaries)
+  --full           Package the full cmake install (keep headers, cmake, all tools)
   --pull           docker pull the toolchain image before building
   --clean          Remove the build dir before configuring
   --clean-all      Remove the cloned source + build dir, then re-clone
@@ -63,6 +70,7 @@ while [[ $# -gt 0 ]]; do
     --jobs)      JOBS="$2"; shift 2 ;;
     --jobs=*)    JOBS="${1#*=}"; shift ;;
     --no-strip)  DO_STRIP=0; shift ;;
+    --full)      PRUNE=0; shift ;;
     --pull)      PULL=1; shift ;;
     --clean)     CLEAN=1; shift ;;
     --clean-all) CLEAN_ALL=1; CLEAN=1; shift ;;
@@ -128,7 +136,9 @@ docker run --rm \
 
     cp docs/backend/snapdragon/CMakeUserPresets.json .
 
-    cmake --preset "$PRESET" -B "$BUILD"
+    # Skip the test-* binaries (faster build, smaller package).
+    cmake --preset "$PRESET" -B "$BUILD" \
+      -DLLAMA_BUILD_TESTS=OFF -DBUILD_TESTING=OFF
     cmake --build "$BUILD" -j "$JOBS"
 
     rm -rf "$PKG"
@@ -158,6 +168,31 @@ docker run --rm \
 # ── package ───────────────────────────────────────────────────────────────────
 PKG_PATH="$SRC_DIR/$PKG_DIR_NAME/llama.cpp"
 [[ -d "$PKG_PATH/lib" ]] || die "Build did not produce $PKG_PATH/lib"
+
+# ── prune to runtime files only ───────────────────────────────────────────────
+# cmake --install ships dev artifacts (headers, cmake/pkgconfig configs) and
+# every built tool. Keep only KEEP_BINS and the .so they actually need.
+if [[ "$PRUNE" == "1" ]]; then
+  log "Pruning package to runtime files (use --full to keep everything)"
+  rm -rf "$PKG_PATH/include" "$PKG_PATH/lib/cmake" "$PKG_PATH/lib/pkgconfig"
+
+  keep="|"; for b in "${KEEP_BINS[@]}"; do keep+="$b|"; done
+
+  # binaries: drop anything not in KEEP_BINS (incl. any stray test-* / tools)
+  for f in "$PKG_PATH"/bin/*; do
+    [[ -f "$f" ]] || continue
+    [[ "$keep" == *"|$(basename "$f")|"* ]] || rm -f "$f"
+  done
+
+  # per-tool impl libs (libllama-<tool>-impl.so) are only needed by their tool;
+  # drop those whose tool was pruned. Core libs (libggml*, libllama.so,
+  # libllama-common.so, libmtmd.so) and HTP kernels are always kept.
+  for f in "$PKG_PATH"/lib/libllama-*-impl.so; do
+    [[ -e "$f" ]] || continue
+    base="$(basename "$f")"; tool="llama-${base#libllama-}"; tool="${tool%-impl.so}"
+    [[ "$keep" == *"|$tool|"* ]] || rm -f "$f"
+  done
+fi
 
 SUFFIX="${LLAMACPP_TAG:+-$LLAMACPP_TAG}"
 TARBALL="$PROJECT_ROOT/llama-android-arm64-hexagon${SUFFIX}.tar.gz"

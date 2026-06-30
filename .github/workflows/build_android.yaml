@@ -187,8 +187,9 @@ jobs:
       - name: Pull toolchain image
         run: docker pull --platform linux/amd64 "$TOOLCHAIN_IMAGE"
 
-      # hexagon-npu/build.sh clones llama.cpp into hexagon-npu/llama.cpp, runs
-      # the cmake snapdragon preset inside the container, strips, and writes
+      # hexagon-npu/build.sh clones llama.cpp into hexagon-npu/llama.cpp, builds
+      # the cmake snapdragon preset (tests skipped) inside the container, strips,
+      # prunes to runtime files, and writes
       # hexagon-npu/llama-android-arm64-hexagon-<tag>.tar.gz(+.sha256).
       - name: Build (CPU + OpenCL + Hexagon)
         run: ./hexagon-npu/build.sh --tag "$LLAMACPP_TAG"

@@ -125,20 +125,28 @@ cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G Ninja \
   -DLLAMA_BUILD_TESTS=OFF \
   "${OPENCL_CMAKE_ARGS[@]}"
 
+# Same runtime tool set as the Hexagon package.
+BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split)
+
 log "Building"
-ninja -C "$BUILD_DIR" -j"$(nproc)" llama-cli llama-server
+ninja -C "$BUILD_DIR" -j"$(nproc)" "${BINS[@]}"
 
 LLVM_STRIP="$NDK_TOOLCHAIN/bin/llvm-strip"
 
+# Package with the same bin/ + lib/ layout as the Hexagon build.
 OUT="$SRC_DIR/android-bin"
 rm -rf "$OUT"
-mkdir -p "$OUT"
-cp "$BUILD_DIR/bin/llama-cli" "$BUILD_DIR/bin/llama-server" "$OUT/"
-cp "$LIBOMP" "$OUT/"
+mkdir -p "$OUT/bin" "$OUT/lib"
+for b in "${BINS[@]}"; do
+  cp "$BUILD_DIR/bin/$b" "$OUT/bin/"
+done
+cp "$LIBOMP" "$OUT/lib/"
 
 log "Stripping binaries"
-"$LLVM_STRIP" --strip-all       "$OUT/llama-cli" "$OUT/llama-server"
-"$LLVM_STRIP" --strip-unneeded  "$OUT/libomp.so"
+for b in "${BINS[@]}"; do
+  "$LLVM_STRIP" --strip-all "$OUT/bin/$b"
+done
+"$LLVM_STRIP" --strip-unneeded "$OUT/lib/libomp.so"
 
-log "Done — binaries in $OUT"
-ls -lh "$OUT"
+log "Done — package in $OUT"
+find "$OUT" -type f | sort | sed 's/^/    /'
