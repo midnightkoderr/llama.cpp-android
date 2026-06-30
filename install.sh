@@ -3,9 +3,9 @@
 set -euo pipefail
 
 REPO="${REPO:-midnightkoderr/llama.cpp-android}"
-PREFIX="${PREFIX:-${HOME}/llama.cpp}"
-INSTALL_DIR="${INSTALL_DIR:-${PREFIX}/bin}"
-LIB_DIR="${LIB_DIR:-${PREFIX}/lib}"
+BASE_DIR="${HOME}/llama.cpp"
+INSTALL_DIR="${BASE_DIR}/bin"
+LIB_DIR="${BASE_DIR}/lib"
 VARIANT="${VARIANT:-}"           # opencl | hexagon  (empty = auto: keep installed, else opencl)
 UPDATE=0
 REVERT=0
@@ -16,13 +16,11 @@ die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-Usage: installer.sh [options]
+Usage: install.sh [options]
 
   --variant <v>    Backend variant: 'opencl' (Adreno GPU) or 'hexagon' (NPU + GPU + CPU)
   --opencl         Shorthand for --variant opencl (default for a fresh install)
   --hexagon        Shorthand for --variant hexagon
-  --install-dir D  Where to put binaries (default: ${INSTALL_DIR})
-  --lib-dir D      Where to put .so libraries (default: ${LIB_DIR})
   --update         Update to the latest release (keeps the installed variant)
   --revert         Restore the previous version from backup
   -h, --help       Show this help
@@ -35,10 +33,6 @@ while [[ $# -gt 0 ]]; do
     --variant=*)     VARIANT="${1#*=}"; shift ;;
     --opencl)        VARIANT="opencl"; shift ;;
     --hexagon|--npu) VARIANT="hexagon"; shift ;;
-    --install-dir)   INSTALL_DIR="$2"; shift 2 ;;
-    --install-dir=*) INSTALL_DIR="${1#*=}"; shift ;;
-    --lib-dir)       LIB_DIR="$2"; shift 2 ;;
-    --lib-dir=*)     LIB_DIR="${1#*=}"; shift ;;
     --update)        UPDATE=1; shift ;;
     --revert)        REVERT=1; shift ;;
     -h|--help)       usage; exit 0 ;;
