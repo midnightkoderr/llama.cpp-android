@@ -100,6 +100,25 @@ Restores binaries, libraries, version and variant from
 `~/.llama.cpp-bin-backup`, then removes the backup. Only one previous version is
 kept.
 
+## Uninstall
+
+Removes the installed binaries, libraries, version/variant markers and the
+backup — only files this installer creates, so it's safe with a shared dir:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/main/uninstall.sh | bash
+```
+
+Preview without deleting anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/main/uninstall.sh | bash -s -- --dry-run
+```
+
+Match a custom install location with `--prefix` (or `--install-dir`/`--lib-dir`),
+and pass `--keep-backup` to leave the revert backup in place. Afterwards, drop
+the `PATH` / `LD_LIBRARY_PATH` / `ADSP_LIBRARY_PATH` lines you added to `~/.bashrc`.
+
 ## Device reference
 
 | | SD 8 Gen 3 (S24) | SD 7+ Gen 3 (Pad 7) |
