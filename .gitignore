@@ -1,0 +1,13 @@
+# cloned source and all build output
+llama.cpp/
+
+# release archives
+*.tar.gz
+*.sha256
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
