@@ -3,12 +3,16 @@
 set -euo pipefail
 
 REPO="${REPO:-midnightkoderr/llama.cpp-android}"
-BASE_DIR="${HOME}/llama.cpp"
-INSTALL_DIR="${BASE_DIR}/bin"
-LIB_DIR="${BASE_DIR}/lib"
-VARIANT="${VARIANT:-}"           # opencl | hexagon  (empty = auto: keep installed, else opencl)
+VARIANTS=(opencl hexagon)
 UPDATE=0
 REVERT=0
+UNINSTALL=0
+KEEP_BACKUP=0
+DRY_RUN=0
+BACKUP=0
+BACKUP_FILE=""
+RESTORE=0
+RESTORE_FILE=""
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
@@ -18,24 +22,39 @@ usage() {
   cat <<EOF
 Usage: install.sh [options]
 
-  --variant <v>    Backend variant: 'opencl' (Adreno GPU) or 'hexagon' (NPU + GPU + CPU)
-  --opencl         Shorthand for --variant opencl (default for a fresh install)
-  --hexagon        Shorthand for --variant hexagon
-  --update         Update to the latest release (keeps the installed variant)
-  --revert         Restore the previous version from backup
-  -h, --help       Show this help
+Installs both variants side by side (no need to choose one):
+  ${HOME}/llama.cpp-opencl/   CPU + OpenCL (Adreno GPU)
+  ${HOME}/llama.cpp-hexagon/  CPU + OpenCL + Hexagon NPU (HTP)
+
+  --update           Update both to the latest release
+  --revert           Restore both from their backups
+  --uninstall        Remove both installs (and their backups)
+  --keep-backup      With --uninstall, keep the revert backups
+  --dry-run          With --uninstall, list what would be removed, delete nothing
+  --backup [file]    Zip both installs (+ ~/.alias) into one archive
+                     (default: ~/llama-cpp-backup-<timestamp>.zip)
+  --restore <file>   Restore both installs (+ ~/.alias) from a --backup archive
+  -h, --help         Show this help
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --variant)       VARIANT="$2"; shift 2 ;;
-    --variant=*)     VARIANT="${1#*=}"; shift ;;
-    --opencl)        VARIANT="opencl"; shift ;;
-    --hexagon|--npu) VARIANT="hexagon"; shift ;;
-    --update)        UPDATE=1; shift ;;
-    --revert)        REVERT=1; shift ;;
-    -h|--help)       usage; exit 0 ;;
+    --update)      UPDATE=1; shift ;;
+    --revert)      REVERT=1; shift ;;
+    --uninstall)   UNINSTALL=1; shift ;;
+    --keep-backup) KEEP_BACKUP=1; shift ;;
+    --dry-run)     DRY_RUN=1; shift ;;
+    --backup)
+      BACKUP=1
+      if [[ $# -ge 2 && "$2" != -* ]]; then BACKUP_FILE="$2"; shift 2; else shift; fi
+      ;;
+    --restore)
+      RESTORE=1
+      [[ $# -ge 2 ]] || die "--restore requires a path to a backup zip"
+      RESTORE_FILE="$2"; shift 2
+      ;;
+    -h|--help)     usage; exit 0 ;;
     *) die "Unknown argument: $1  (try --help)" ;;
   esac
 done
@@ -46,184 +65,234 @@ for t in curl tar; do
   command -v "$t" >/dev/null 2>&1 || die "Missing: ${t}"
 done
 
-VERSION_FILE="${LIB_DIR}/llama-cpp.version"
-VARIANT_FILE="${LIB_DIR}/llama-cpp.variant"
-BACKUP_DIR="${HOME}/.llama.cpp-bin-backup"
+dir_for()    { printf '%s/llama.cpp-%s' "${HOME}" "$1"; }
+backup_for() { printf '%s/.llama.cpp-bin-backup-%s' "${HOME}" "$1"; }
 
-installed_variant() { [[ -f "${VARIANT_FILE}" ]] && cat "${VARIANT_FILE}" || echo ""; }
+# ── uninstall ─────────────────────────────────────────────────────────────────
+if [[ "${UNINSTALL}" == "1" ]]; then
+  [[ "${DRY_RUN}" == "1" ]] && log "DRY RUN — nothing will be deleted"
 
-# Resolve which variant we're operating on:
-#   explicit flag wins; else keep what's installed; else default to opencl.
-if [[ -z "${VARIANT}" ]]; then
-  VARIANT="$(installed_variant)"
-  [[ -z "${VARIANT}" ]] && VARIANT="opencl"
-fi
-case "${VARIANT}" in
-  opencl|hexagon) ;;
-  *) die "Invalid --variant '${VARIANT}' (expected: opencl | hexagon)" ;;
-esac
+  rm_path() {
+    local p="$1"
+    [[ -e "$p" || -L "$p" ]] || return 0
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      printf '    remove %s\n' "$p"
+    else
+      rm -rf "$p"
+    fi
+    removed=$((removed + 1))
+  }
 
-# ── revert ────────────────────────────────────────────────────────────────────
-if [[ "${REVERT}" == "1" ]]; then
-  [[ -d "${BACKUP_DIR}" ]] || die "No backup found in ${BACKUP_DIR} — nothing to revert to"
-  prev="unknown"
-  [[ -f "${BACKUP_DIR}/llama-cpp.version" ]] && prev=$(cat "${BACKUP_DIR}/llama-cpp.version")
-  pvar="unknown"
-  [[ -f "${BACKUP_DIR}/llama-cpp.variant" ]] && pvar=$(cat "${BACKUP_DIR}/llama-cpp.variant")
-  log "Reverting to ${prev} (${pvar})"
+  removed=0
+  for VARIANT in "${VARIANTS[@]}"; do
+    BASE_DIR="$(dir_for "${VARIANT}")"
+    INSTALL_DIR="${BASE_DIR}/bin"
+    LIB_DIR="${BASE_DIR}/lib"
+    BACKUP_DIR="$(backup_for "${VARIANT}")"
 
-  mkdir -p "${INSTALL_DIR}" "${LIB_DIR}"
-  cp "${BACKUP_DIR}"/bin/* "${INSTALL_DIR}/" 2>/dev/null || die "Backup has no binaries"
-  cp "${BACKUP_DIR}"/lib/*.so "${LIB_DIR}/" 2>/dev/null || true
-  [[ -f "${BACKUP_DIR}/llama-cpp.version" ]] && cp "${BACKUP_DIR}/llama-cpp.version" "${VERSION_FILE}"
-  [[ -f "${BACKUP_DIR}/llama-cpp.variant" ]] && cp "${BACKUP_DIR}/llama-cpp.variant" "${VARIANT_FILE}"
-  chmod +x "${INSTALL_DIR}"/llama-* 2>/dev/null || true
-  rm -rf "${BACKUP_DIR}"
-  log "Reverted to ${prev} (${pvar})"
+    if [[ ! -d "${BASE_DIR}" ]]; then
+      warn "${VARIANT}: not installed — skipping"
+      continue
+    fi
+
+    tag="unknown"
+    [[ -f "${LIB_DIR}/llama-cpp.version" ]] && tag=$(cat "${LIB_DIR}/llama-cpp.version")
+    log "Uninstalling ${VARIANT} (${tag}) from ${BASE_DIR}"
+
+    rm_path "${INSTALL_DIR}"
+    rm_path "${LIB_DIR}"
+    [[ "${KEEP_BACKUP}" == "0" ]] && rm_path "${BACKUP_DIR}"
+
+    if [[ -d "${BASE_DIR}" && -z "$(ls -A "${BASE_DIR}" 2>/dev/null)" ]]; then
+      if [[ "${DRY_RUN}" == "1" ]]; then
+        printf '    rmdir  %s (empty)\n' "${BASE_DIR}"
+      else
+        rmdir "${BASE_DIR}" 2>/dev/null || true
+      fi
+    elif [[ -d "${BASE_DIR}" ]]; then
+      warn "Kept ${BASE_DIR} — it still contains other files"
+    fi
+  done
+
+  if [[ "${removed}" == "0" ]]; then
+    warn "Nothing found to remove (already uninstalled?)"
+  else
+    log "Done — removed ${removed} item(s)."
+  fi
+
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    cat <<EOF
+
+Note: remove the llama-*-npu / llama-*-gpu alias lines (and the
+'. ~/.alias' line) from ~/.bashrc if you no longer need them.
+EOF
+  fi
   exit 0
 fi
 
-# ── fetch release info ────────────────────────────────────────────────────────
-log "Variant: ${VARIANT}"
+# ── backup ────────────────────────────────────────────────────────────────────
+if [[ "${BACKUP}" == "1" ]]; then
+  command -v zip >/dev/null 2>&1 || die "Missing: zip  (install with: pkg install zip)"
+  [[ -n "${BACKUP_FILE}" ]] || BACKUP_FILE="${HOME}/llama-cpp-backup-$(date +%Y%m%d-%H%M%S).zip"
+
+  items=()
+  for VARIANT in "${VARIANTS[@]}"; do
+    d="llama.cpp-${VARIANT}"
+    [[ -d "${HOME}/${d}" ]] && items+=("${d}")
+  done
+  [[ -f "${HOME}/.alias" ]] && items+=(".alias")
+  [[ ${#items[@]} -gt 0 ]] || die "Nothing installed to back up"
+
+  log "Backing up: ${items[*]}"
+  ( cd "${HOME}" && zip -rq "${BACKUP_FILE}" "${items[@]}" )
+  log "Backup written to ${BACKUP_FILE}"
+  exit 0
+fi
+
+# ── restore ───────────────────────────────────────────────────────────────────
+if [[ "${RESTORE}" == "1" ]]; then
+  command -v unzip >/dev/null 2>&1 || die "Missing: unzip  (install with: pkg install unzip)"
+  [[ -f "${RESTORE_FILE}" ]] || die "Backup file not found: ${RESTORE_FILE}"
+
+  log "Restoring ${RESTORE_FILE} into ${HOME}"
+  unzip -oq "${RESTORE_FILE}" -d "${HOME}"
+
+  for VARIANT in "${VARIANTS[@]}"; do
+    BASE_DIR="$(dir_for "${VARIANT}")"
+    [[ -d "${BASE_DIR}/bin" ]] && chmod +x "${BASE_DIR}/bin"/llama-* 2>/dev/null || true
+  done
+  log "Restore complete."
+  exit 0
+fi
+
+# ── revert ────────────────────────────────────────────────────────────────────
+if [[ "${REVERT}" == "1" ]]; then
+  for VARIANT in "${VARIANTS[@]}"; do
+    BASE_DIR="$(dir_for "${VARIANT}")"
+    INSTALL_DIR="${BASE_DIR}/bin"
+    LIB_DIR="${BASE_DIR}/lib"
+    BACKUP_DIR="$(backup_for "${VARIANT}")"
+
+    if [[ ! -d "${BACKUP_DIR}" ]]; then
+      warn "${VARIANT}: no backup found in ${BACKUP_DIR} — skipping"
+      continue
+    fi
+
+    prev="unknown"
+    [[ -f "${BACKUP_DIR}/llama-cpp.version" ]] && prev=$(cat "${BACKUP_DIR}/llama-cpp.version")
+    log "${VARIANT}: reverting to ${prev}"
+
+    mkdir -p "${INSTALL_DIR}" "${LIB_DIR}"
+    cp "${BACKUP_DIR}"/bin/* "${INSTALL_DIR}/" 2>/dev/null || die "${VARIANT}: backup has no binaries"
+    cp "${BACKUP_DIR}"/lib/*.so "${LIB_DIR}/" 2>/dev/null || true
+    [[ -f "${BACKUP_DIR}/llama-cpp.version" ]] && cp "${BACKUP_DIR}/llama-cpp.version" "${LIB_DIR}/llama-cpp.version"
+    chmod +x "${INSTALL_DIR}"/llama-* 2>/dev/null || true
+    rm -rf "${BACKUP_DIR}"
+    log "${VARIANT}: reverted to ${prev}"
+  done
+  exit 0
+fi
+
+# ── fetch release info (once, shared by both variants) ────────────────────────
 log "Fetching latest release info for ${REPO}"
 release=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
-
 tag=$(printf '%s' "${release}" | grep '"tag_name"' | head -n1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
-# Pick the .tar.gz asset whose name carries the requested variant (…-opencl-… / …-hexagon-…)
-url=$(printf '%s' "${release}" | grep '"browser_download_url"' | grep '\.tar\.gz"' \
-        | grep -- "-${VARIANT}-" | head -n1 | sed 's/.*"browser_download_url": *"\(.*\)".*/\1/')
-sha_url=$(printf '%s' "${release}" | grep '"browser_download_url"' | grep '\.tar\.gz\.sha256"' \
-        | grep -- "-${VARIANT}-" | head -n1 | sed 's/.*"browser_download_url": *"\(.*\)".*/\1/')
-
 [[ -n "${tag}" ]] || die "Could not parse release tag — does the repo have any releases?"
-[[ -n "${url}" ]] || die "No '${VARIANT}' .tar.gz asset in release ${tag}. Available variants may differ — try --variant opencl or --variant hexagon."
+log "Latest release: ${tag}"
 
-# ── update: version check + backup ───────────────────────────────────────────
-if [[ "${UPDATE}" == "1" ]]; then
-  current="none"; cur_var="$(installed_variant)"
-  [[ -f "${VERSION_FILE}" ]] && current=$(cat "${VERSION_FILE}")
-  if [[ "${current}" == "${tag}" && "${cur_var}" == "${VARIANT}" ]]; then
-    log "Already up to date (${tag}, ${VARIANT})"
-    exit 0
+for VARIANT in "${VARIANTS[@]}"; do
+  BASE_DIR="$(dir_for "${VARIANT}")"
+  INSTALL_DIR="${BASE_DIR}/bin"
+  LIB_DIR="${BASE_DIR}/lib"
+  VERSION_FILE="${LIB_DIR}/llama-cpp.version"
+  BACKUP_DIR="$(backup_for "${VARIANT}")"
+
+  url=$(printf '%s' "${release}" | grep '"browser_download_url"' | grep '\.tar\.gz"' \
+          | grep -- "-${VARIANT}-" | head -n1 | sed 's/.*"browser_download_url": *"\(.*\)".*/\1/')
+  sha_url=$(printf '%s' "${release}" | grep '"browser_download_url"' | grep '\.tar\.gz\.sha256"' \
+          | grep -- "-${VARIANT}-" | head -n1 | sed 's/.*"browser_download_url": *"\(.*\)".*/\1/')
+  [[ -n "${url}" ]] || die "No '${VARIANT}' .tar.gz asset in release ${tag}"
+
+  if [[ "${UPDATE}" == "1" ]]; then
+    current="none"
+    [[ -f "${VERSION_FILE}" ]] && current=$(cat "${VERSION_FILE}")
+    if [[ "${current}" == "${tag}" ]]; then
+      log "${VARIANT}: already up to date (${tag})"
+      continue
+    fi
+    log "${VARIANT}: updating ${current} → ${tag}"
+    if [[ -f "${INSTALL_DIR}/llama-cli" ]]; then
+      rm -rf "${BACKUP_DIR}"
+      mkdir -p "${BACKUP_DIR}/bin" "${BACKUP_DIR}/lib"
+      for b in "${INSTALL_DIR}"/llama-*; do [[ -f "$b" ]] && cp "$b" "${BACKUP_DIR}/bin/"; done
+      for l in "${LIB_DIR}"/*.so;     do [[ -f "$l" ]] && cp "$l" "${BACKUP_DIR}/lib/"; done
+      [[ -f "${VERSION_FILE}" ]] && cp "${VERSION_FILE}" "${BACKUP_DIR}/"
+    fi
   fi
-  log "Updating ${current} (${cur_var:-none}) → ${tag} (${VARIANT})"
 
-  if [[ -f "${INSTALL_DIR}/llama-cli" ]]; then
-    log "Backing up current install to ${BACKUP_DIR}"
-    rm -rf "${BACKUP_DIR}"
-    mkdir -p "${BACKUP_DIR}/bin" "${BACKUP_DIR}/lib"
-    for b in "${INSTALL_DIR}"/llama-*; do [[ -f "$b" ]] && cp "$b" "${BACKUP_DIR}/bin/"; done
-    for l in "${LIB_DIR}"/*.so;     do [[ -f "$l" ]] && cp "$l" "${BACKUP_DIR}/lib/"; done
-    [[ -f "${VERSION_FILE}" ]] && cp "${VERSION_FILE}" "${BACKUP_DIR}/"
-    [[ -f "${VARIANT_FILE}" ]] && cp "${VARIANT_FILE}" "${BACKUP_DIR}/"
+  log "${VARIANT}: downloading $(basename "${url}")"
+  mkdir -p "${INSTALL_DIR}" "${LIB_DIR}"
+  tmp=$(mktemp -d)
+
+  curl -fsSL --progress-bar "${url}" -o "${tmp}/llama.tar.gz"
+
+  if [[ -n "${sha_url}" ]] && command -v sha256sum >/dev/null 2>&1; then
+    curl -fsSL "${sha_url}" -o "${tmp}/llama.tar.gz.sha256"
+    expected=$(awk '{print $1}' "${tmp}/llama.tar.gz.sha256")
+    actual=$(sha256sum "${tmp}/llama.tar.gz" | awk '{print $1}')
+    [[ "${expected}" == "${actual}" ]] || die "${VARIANT}: checksum mismatch (expected ${expected}, got ${actual})"
   fi
-else
-  log "Latest release: ${tag}"
-fi
 
-# ── download + install ────────────────────────────────────────────────────────
-log "Downloading: $(basename "${url}")"
+  tar -xzf "${tmp}/llama.tar.gz" -C "${tmp}"
+  [[ -d "${tmp}/bin" && -d "${tmp}/lib" ]] || die "${VARIANT}: unexpected archive layout (no bin/ + lib/)"
 
-mkdir -p "${INSTALL_DIR}" "${LIB_DIR}"
-tmp=$(mktemp -d)
-trap 'rm -rf "${tmp}"' EXIT
+  bins=( "${tmp}"/bin/llama-* )
+  [[ ${#bins[@]} -gt 0 ]] || die "${VARIANT}: no llama-* binaries found in archive"
+  cp "${bins[@]}" "${INSTALL_DIR}/"
 
-curl -fsSL --progress-bar "${url}" -o "${tmp}/llama.tar.gz"
+  libs=( "${tmp}"/lib/*.so )
+  [[ ${#libs[@]} -gt 0 ]] && cp "${libs[@]}" "${LIB_DIR}/"
 
-# Optional checksum verification when the .sha256 asset and sha256sum are present
-if [[ -n "${sha_url}" ]] && command -v sha256sum >/dev/null 2>&1; then
-  log "Verifying checksum"
-  curl -fsSL "${sha_url}" -o "${tmp}/llama.tar.gz.sha256"
-  expected=$(awk '{print $1}' "${tmp}/llama.tar.gz.sha256")
-  actual=$(sha256sum "${tmp}/llama.tar.gz" | awk '{print $1}')
-  [[ "${expected}" == "${actual}" ]] || die "Checksum mismatch (expected ${expected}, got ${actual})"
-fi
+  chmod +x "${INSTALL_DIR}"/llama-* 2>/dev/null || true
+  printf '%s' "${tag}" > "${VERSION_FILE}"
+  rm -rf "${tmp}"
 
-tar -xzf "${tmp}/llama.tar.gz" -C "${tmp}"
+  log "${VARIANT}: installed → ${BASE_DIR}"
+done
 
-# Both variants ship the same layout: bin/<binaries> + lib/*.so .
-[[ -d "${tmp}/bin" && -d "${tmp}/lib" ]] || die "Unexpected archive layout (no bin/ + lib/)"
+OPENCL_DIR="$(dir_for opencl)"
+HEXAGON_DIR="$(dir_for hexagon)"
 
-# binaries → INSTALL_DIR (only llama-* — never .so or other files)
-bins=( "${tmp}"/bin/llama-* )
-[[ ${#bins[@]} -gt 0 ]] || die "No llama-* binaries found in archive"
-cp "${bins[@]}" "${INSTALL_DIR}/"
-
-# shared libs → LIB_DIR
-libs=( "${tmp}"/lib/*.so )
-[[ ${#libs[@]} -gt 0 ]] && cp "${libs[@]}" "${LIB_DIR}/"
-
-chmod +x "${INSTALL_DIR}"/llama-* 2>/dev/null || true
-printf '%s' "${tag}"     > "${VERSION_FILE}"
-printf '%s' "${VARIANT}" > "${VARIANT_FILE}"
-
-log "Binaries → ${INSTALL_DIR}:"
-ls -lh "${INSTALL_DIR}"/llama-* 2>/dev/null || true
-log "Libraries → ${LIB_DIR}:"
-ls -lh "${LIB_DIR}"/*.so 2>/dev/null || true
-
-# ── post-install help (variant-aware) ─────────────────────────────────────────
-if [[ "${VARIANT}" == "hexagon" ]]; then
 cat <<EOF
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  llama.cpp ${tag} installed · variant: hexagon (NPU + GPU + CPU)
+  llama.cpp ${tag} installed — both variants, side by side
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Add to ~/.bashrc (PATH for the binaries, plus the library paths —
-ADSP_LIBRARY_PATH lets FastRPC find the HTP kernels):
+  ${OPENCL_DIR}   CPU + OpenCL (Adreno GPU)
+  ${HEXAGON_DIR}  CPU + OpenCL + Hexagon NPU (HTP)
 
-  echo 'export PATH="${INSTALL_DIR}:\${PATH}"' >> ~/.bashrc
-  echo 'export LD_LIBRARY_PATH="/vendor/lib64:${LIB_DIR}:${LD_LIBRARY_PATH:-}"' >> ~/.bashrc
-  echo 'export ADSP_LIBRARY_PATH="${LIB_DIR}"'                  >> ~/.bashrc
-  source ~/.bashrc
+Add to ~/.alias (create it if it doesn't exist), then source it from
+~/.bashrc with '. ~/.alias':
+
+  alias llama-cli-npu="LD_LIBRARY_PATH=${HEXAGON_DIR}/lib ADSP_LIBRARY_PATH=${HEXAGON_DIR}/lib ${HEXAGON_DIR}/bin/llama-cli"
+  alias llama-server-npu="LD_LIBRARY_PATH=${HEXAGON_DIR}/lib ADSP_LIBRARY_PATH=${HEXAGON_DIR}/lib ${HEXAGON_DIR}/bin/llama-server"
+  alias llama-cli-gpu="LD_LIBRARY_PATH=${OPENCL_DIR}/lib ${OPENCL_DIR}/bin/llama-cli"
+  alias llama-server-gpu="LD_LIBRARY_PATH=${OPENCL_DIR}/lib ${OPENCL_DIR}/bin/llama-server"
+
+  echo '. ~/.alias' >> ~/.bashrc
+  . ~/.bashrc
 
 ── NPU (Hexagon HTP) ────────────────────────────────────
   # 8 Gen 3 → Hexagon v75 · 7+ Gen 3 → Hexagon v73 (auto-selected)
-  llama-cli -m model-Q4_0.gguf --device HTP0 -ngl 99 -c 4096 -p "Hello"
-
-  Best with Q4_0 / Q8_0 / MXFP4 weights. One NPU session maps ~3.5GB; for
-  bigger models split: GGML_HEXAGON_NDEV=2 llama-cli ... --device HTP0,HTP1
+  llama-cli-npu -m model-Q4_0.gguf --device HTP0 -ngl 99 -c 4096 -p "Hello"
 
 ── GPU (OpenCL / Adreno) ────────────────────────────────
-  # the same package also ships the OpenCL backend
-  taskset -c 2-7 llama-cli -m model.gguf -t 4 -ngl 28 -c 4096 -p "Hello"
+  taskset -c 2-7 llama-cli-gpu -m model.gguf -t 4 -ngl 28 -c 4096 -p "Hello"
 
 ── Server (OpenAI-compatible API) ───────────────────────
-  llama-server -m model.gguf --host 0.0.0.0 --port 8080 --device HTP0 -ngl 99
+  llama-server-npu -m model.gguf --host 0.0.0.0 --port 8080 --device HTP0 -ngl 99
+  llama-server-gpu -m model.gguf --host 0.0.0.0 --port 8080 -t 4 -ngl 28 -c 4096
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EOF
-else
-cat <<EOF
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  llama.cpp ${tag} installed · variant: opencl (GPU + CPU)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Add to ~/.bashrc (PATH for the binaries + library path for libomp.so):
-
-  echo 'export PATH="${INSTALL_DIR}:\${PATH}"' >> ~/.bashrc
-  echo 'export LD_LIBRARY_PATH="/vendor/lib64:${LIB_DIR}:${LD_LIBRARY_PATH:-}"' >> ~/.bashrc
-  source ~/.bashrc
-
-── CPU only ─────────────────────────────────────────────
-  # SD 8 Gen 3 (6 P-cores: cpu2-7)
-  taskset -c 2-7 llama-cli -m model.gguf -t 6 -ngl 0 -c 2048 -p "Hello"
-  # SD 7+ Gen 3 (4 P-cores: cpu4-7)
-  taskset -c 4-7 llama-cli -m model.gguf -t 4 -ngl 0 -c 2048 -p "Hello"
-
-── GPU (OpenCL / Adreno) ────────────────────────────────
-  # SD 8 Gen 3 — Adreno 750
-  taskset -c 2-7 llama-cli -m model.gguf -t 4 -ngl 28 -c 4096 -p "Hello"
-  # SD 7+ Gen 3 — Adreno 732
-  taskset -c 4-7 llama-cli -m model.gguf -t 2 -ngl 28 -c 2048 -p "Hello"
-
-  Start with -ngl 10 and increase until it slows or crashes.
-
-── Server (OpenAI-compatible API) ───────────────────────
-  llama-server -m model.gguf --host 0.0.0.0 --port 8080 -t 4 -ngl 28 -c 4096
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EOF
-fi
