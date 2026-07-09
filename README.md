@@ -29,9 +29,20 @@ llama-install
 On plain `adb shell` (no Termux), run it via `bash ~/.local/bin/llama-install`
 instead — the saved script's shebang targets Termux's bash path.
 
-This installs all three (gpu, npu, cpu) in one go, each with a `run.sh` and an
-`env.sh`. Quickest path — `run.sh <model.gguf> [llama-cli args...]` applies
-sensible per-variant defaults, no setup needed:
+With no argument, `llama-install` sets up all three (gpu, npu, cpu) in one go.
+To install just one, pass it as the first argument — this works with
+`--update`, `--uninstall`, and `--revert` too, not just a fresh install:
+
+```bash
+llama-install gpu    # OpenCL GPU + CPU only
+llama-install npu    # Hexagon NPU + GPU + CPU only
+llama-install cpu    # CPU-only build, no gpu/ — binaries land in cpu/ itself
+llama-install all    # everything (same as passing nothing)
+```
+
+Each install gets its own `run.sh` and an `env.sh`. Quickest path —
+`run.sh <model.gguf> [llama-cli args...]` applies sensible per-variant
+defaults, no setup needed:
 
 ```bash
 ~/llama.cpp/npu/run.sh model-Q4_0.gguf -p "Hello"   # Hexagon NPU + GPU + CPU
@@ -57,7 +68,7 @@ same names.
 
 ## Uninstall
 
-Remove both installs and their revert backups:
+Remove everything (all installs + their revert backups):
 
 ```bash
 llama-install --uninstall
@@ -67,6 +78,18 @@ or
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/main/install.sh | bash -s -- --uninstall
+```
+
+Remove just one target — `llama-install <cpu|gpu|npu> --uninstall`. `npu`
+removes only `~/llama.cpp/npu/`. `gpu` removes `~/llama.cpp/gpu/` **and**
+`cpu/` with it, since `cpu/` can't function without the gpu build. `cpu` is
+the one exception — it removes only the `cpu/` wrapper, leaving `gpu/` (and
+whatever's using it) untouched:
+
+```bash
+llama-install npu --uninstall
+llama-install gpu --uninstall   # also removes cpu/
+llama-install cpu --uninstall   # removes only cpu/, keeps gpu/
 ```
 
 Keep the revert backups instead of deleting them:
@@ -97,9 +120,10 @@ llama-install --update
 curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/main/install.sh | bash -s -- --update
 ```
 
-Updates both variants, skips whichever is already current, and backs up each
-variant's previous version separately (`~/.llama.cpp-bin-backup-opencl` /
-`~/.llama.cpp-bin-backup-hexagon`) first.
+Updates everything installed, skips whichever is already current, and backs
+up each variant's previous version separately
+(`~/.llama.cpp-bin-backup-opencl` / `~/.llama.cpp-bin-backup-hexagon`) first.
+Add a target to update just that one, e.g. `llama-install npu --update`.
 
 ## Revert
 
@@ -113,7 +137,8 @@ or
 curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/main/install.sh | bash -s -- --revert
 ```
 
-Restores both variants' previous version from backup (one level kept each).
+Restores the previous version from backup (one level kept each). Add a
+target to revert just that one, e.g. `llama-install gpu --revert`.
 
 ## Backup & Restore
 

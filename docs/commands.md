@@ -1,7 +1,8 @@
 # Sample commands
 
-Source the matching variant's `env.sh` first (or use its `run.sh` for a
-one-liner instead — see the top-level [README](../README.md) and
+Install the variant(s) you need first — `llama-install cpu|gpu|npu|all` (see
+the top-level [README](../README.md#install)) — then source that variant's
+`env.sh` (or use its `run.sh` for a one-liner instead — see
 [USAGE.md](USAGE.md)).
 
 ## NPU

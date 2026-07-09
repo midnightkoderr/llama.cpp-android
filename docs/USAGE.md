@@ -5,8 +5,21 @@ with the top-level [README](../README.md).
 
 ## Quick start
 
-Each variant has a `run.sh` that takes just a model path and applies sensible
-defaults — no env sourcing needed:
+`llama-install` (see the top-level [README](../README.md#install)) installs
+all three by default, or just one if you pass it as the first argument:
+
+```bash
+llama-install gpu    # OpenCL GPU + CPU only
+llama-install npu    # Hexagon NPU + GPU + CPU only
+llama-install cpu    # CPU-only build, no gpu/ — binaries land in cpu/ itself
+llama-install all    # everything (same as passing nothing)
+```
+
+The same target also scopes `--update`, `--uninstall`, and `--revert` — e.g.
+`llama-install npu --update` updates only the npu install.
+
+Each installed variant has a `run.sh` that takes just a model path and
+applies sensible defaults — no env sourcing needed:
 
 ```bash
 ~/llama.cpp/npu/run.sh model-Q4_0.gguf -p "Hello"
