@@ -7,9 +7,9 @@ with the top-level [README](../README.md).
 
 | | SD 8 Gen 3 (S24) | SD 7+ Gen 3 (Pad 7) |
 |---|---|---|
-| CPU | 1× X4 (3.3 GHz) + 5× A720 + 2× A520 | 1× X4 (2.8 GHz) + 3× A720 + 4× A520 |
-| P-cores | 6 (cpu2–7) | 4 (cpu4–7) |
-| E-cores | 2 (cpu0–1) | 4 (cpu0–3) |
+| CPU | 1× X4 (3.3 GHz) + 5× A720 + 2× A520 | 1× X4 (2.8 GHz) + 4× A720 + 3× A520 |
+| P-cores | 6 (cpu2–7) | 5 (cpu3–7) |
+| E-cores | 2 (cpu0–1) | 3 (cpu0–2) |
 | GPU | Adreno 750 | Adreno 732 |
 | NPU | Hexagon v75 | Hexagon v73 |
 | Mem bandwidth | ~77 GB/s | ~51 GB/s |
@@ -47,7 +47,7 @@ taskset -c 2-7 llama-cli-gpu -m model.gguf -t 4 -ngl 28 -c 4096 -p "Hello"
 SD 7+ Gen 3 (Adreno 732):
 
 ```bash
-taskset -c 4-7 llama-cli-gpu -m model.gguf -t 2 -ngl 28 -c 2048 -p "Hello"
+taskset -c 3-7 llama-cli-gpu -m model.gguf -t 3 -ngl 28 -c 2048 -p "Hello"
 ```
 
 ## CPU only (either alias, `-ngl 0`)
@@ -58,10 +58,10 @@ SD 8 Gen 3 (6 P-cores: cpu2-7):
 taskset -c 2-7 llama-cli-gpu -m model.gguf -t 6 -ngl 0 -c 2048 -p "Hello"
 ```
 
-SD 7+ Gen 3 (4 P-cores: cpu4-7):
+SD 7+ Gen 3 (5 P-cores: cpu3-7):
 
 ```bash
-taskset -c 4-7 llama-cli-gpu -m model.gguf -t 4 -ngl 0 -c 2048 -p "Hello"
+taskset -c 3-7 llama-cli-gpu -m model.gguf -t 5 -ngl 0 -c 2048 -p "Hello"
 ```
 
 ## llama-server (OpenAI-compatible API)
@@ -84,8 +84,8 @@ Access at `http://localhost:8080`.
 
 | Flag | SD 8 Gen 3 | SD 7+ Gen 3 | Effect |
 |------|---|---|---|
-| `-t` | `6` | `4` | Thread count — match P-core count |
-| `-t` (with offload) | `4` | `2` | Fewer threads needed when GPU/NPU offloads |
+| `-t` | `6` | `5` | Thread count — match P-core count |
+| `-t` (with offload) | `4` | `3` | Fewer threads needed when GPU/NPU offloads |
 | `-c` | `2048`–`4096` | `2048` | Context length |
 | `-ngl 0` | ✓ | ✓ | CPU-only mode |
 | `--device HTP0 -ngl 99` | ✓ | ✓ | Full NPU offload (hexagon variant) |
@@ -102,7 +102,7 @@ command -v taskset >/dev/null || pkg install util-linux
 ```
 
 - **SD 8 Gen 3** — P-cores are `cpu2–7`: `taskset -c 2-7 llama-cli-gpu -t 6 ...`
-- **SD 7+ Gen 3** — P-cores are `cpu4–7`: `taskset -c 4-7 llama-cli-gpu -t 4 ...`
+- **SD 7+ Gen 3** — P-cores are `cpu3–7`: `taskset -c 3-7 llama-cli-gpu -t 5 ...`
 
 ## libomp.so (opencl variant)
 

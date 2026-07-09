@@ -4,7 +4,10 @@ set -euo pipefail
 ANDROID_NDK="${ANDROID_NDK:-}"
 ANDROID_ABI="arm64-v8a"
 ANDROID_API="34"
-ARCH_FLAGS="-march=armv8.6-a+i8mm+bf16+dotprod -O3 -flto=thin -ffunction-sections -fdata-sections"
+# fp16/dotprod/i8mm/bf16 + fast-math match the flags upstream validated for this
+# exact chip family in docs/backend/snapdragon/CMakeUserPresets.json; keep
+# -fno-finite-math-only since ggml relies on NaN/Inf checks in some code paths.
+ARCH_FLAGS="-march=armv8.7a+fp16+dotprod+i8mm+bf16 -O3 -flto=thin -fvectorize -ffp-model=fast -fno-finite-math-only -ffunction-sections -fdata-sections"
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp.git"
 SRC_DIR="${SRC_DIR:-$PWD/llama.cpp}"
 BUILD_DIR="$SRC_DIR/build-android"
