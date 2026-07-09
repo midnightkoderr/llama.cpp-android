@@ -3,6 +3,32 @@
 Running the installed binaries, per-SoC tuning, and core pinning. Install first
 with the top-level [README](../README.md).
 
+## Quick start
+
+Each variant has a `run.sh` that takes just a model path and applies sensible
+defaults — no env sourcing needed:
+
+```bash
+~/llama.cpp/npu/run.sh model-Q4_0.gguf -p "Hello"
+~/llama.cpp/gpu/run.sh model.gguf -p "Hello"
+~/llama.cpp/cpu/run.sh model.gguf -p "Hello"
+```
+
+Defaults are tunable via env vars without editing anything — `NGL`, `CTX`,
+`THREADS`, and (gpu/cpu only) `CORES` for `taskset` pinning, matching the
+per-SoC values used throughout the rest of this doc:
+
+```bash
+CORES=2-7 THREADS=4 ~/llama.cpp/gpu/run.sh model.gguf -p "Hello"
+```
+
+The rest of this doc covers those same flags manually. Source a variant's
+`env.sh` first to put `llama-cli`/`llama-server` on `PATH` for the shell:
+
+```bash
+source ~/llama.cpp/npu/env.sh   # or gpu/env.sh, or cpu/env.sh
+```
+
 ## Device reference
 
 | | SD 8 Gen 3 (S24) | SD 7+ Gen 3 (Pad 7) |
@@ -17,51 +43,60 @@ with the top-level [README](../README.md).
 Both chips share CPU microarchitectures (X4, A720, A520) and ISA extensions —
 one binary runs on both.
 
-## NPU (Hexagon — `llama-cli-npu` / `llama-server-npu`)
+## NPU (Hexagon)
 
 Offload to the NPU with `--device HTP0 -ngl 99`. Best with **Q4_0 / Q8_0 /
 MXFP4** weights (those are repacked for the NPU):
 
 ```bash
-llama-cli-npu -m model-Q4_0.gguf --device HTP0 -ngl 99 -c 4096 -p "Hello"
+source ~/llama.cpp/npu/env.sh
+llama-cli -m model-Q4_0.gguf --device HTP0 -ngl 99 -c 4096 -p "Hello"
 ```
 
 A single NPU session maps ~3.5 GB. Split larger models across devices:
 
 ```bash
-GGML_HEXAGON_NDEV=2 llama-cli-npu -m big-Q4_0.gguf --device HTP0,HTP1 -ngl 99 -c 4096 -p "Hello"
+GGML_HEXAGON_NDEV=2 llama-cli -m big-Q4_0.gguf --device HTP0,HTP1 -ngl 99 -c 4096 -p "Hello"
 ```
 
-## GPU (OpenCL / Adreno — `llama-cli-gpu` / `llama-server-gpu`)
+## GPU (OpenCL / Adreno)
 
 Offload `N` layers with `-ngl N`. Start at `10` and raise until inference slows
 or the process crashes (unified memory limit). CPU and GPU share RAM — keep the
 model under ~50% of total RAM.
 
+```bash
+source ~/llama.cpp/gpu/env.sh
+```
+
 SD 8 Gen 3 (Adreno 750):
 
 ```bash
-taskset -c 2-7 llama-cli-gpu -m model.gguf -t 4 -ngl 28 -c 4096 -p "Hello"
+taskset -c 2-7 llama-cli -m model.gguf -t 4 -ngl 28 -c 4096 -p "Hello"
 ```
 
 SD 7+ Gen 3 (Adreno 732):
 
 ```bash
-taskset -c 3-7 llama-cli-gpu -m model.gguf -t 3 -ngl 28 -c 2048 -p "Hello"
+taskset -c 3-7 llama-cli -m model.gguf -t 3 -ngl 28 -c 2048 -p "Hello"
 ```
 
-## CPU only (either alias, `-ngl 0`)
+## CPU only (`~/llama.cpp/cpu/`, reuses the gpu build with `-ngl 0`)
+
+```bash
+source ~/llama.cpp/cpu/env.sh
+```
 
 SD 8 Gen 3 (6 P-cores: cpu2-7):
 
 ```bash
-taskset -c 2-7 llama-cli-gpu -m model.gguf -t 6 -ngl 0 -c 2048 -p "Hello"
+taskset -c 2-7 llama-cli -m model.gguf -t 6 -ngl 0 -c 2048 -p "Hello"
 ```
 
 SD 7+ Gen 3 (5 P-cores: cpu3-7):
 
 ```bash
-taskset -c 3-7 llama-cli-gpu -m model.gguf -t 5 -ngl 0 -c 2048 -p "Hello"
+taskset -c 3-7 llama-cli -m model.gguf -t 5 -ngl 0 -c 2048 -p "Hello"
 ```
 
 ## llama-server (OpenAI-compatible API)
@@ -69,13 +104,15 @@ taskset -c 3-7 llama-cli-gpu -m model.gguf -t 5 -ngl 0 -c 2048 -p "Hello"
 GPU:
 
 ```bash
-llama-server-gpu -m model.gguf --host 0.0.0.0 --port 8080 -t 4 -ngl 28 -c 4096
+source ~/llama.cpp/gpu/env.sh
+llama-server -m model.gguf --host 0.0.0.0 --port 8080 -t 4 -ngl 28 -c 4096
 ```
 
 NPU:
 
 ```bash
-llama-server-npu -m model-Q4_0.gguf --host 0.0.0.0 --port 8080 --device HTP0 -ngl 99
+source ~/llama.cpp/npu/env.sh
+llama-server -m model-Q4_0.gguf --host 0.0.0.0 --port 8080 --device HTP0 -ngl 99
 ```
 
 Access at `http://localhost:8080`.
@@ -101,12 +138,13 @@ Install `util-linux` for `taskset` if needed:
 command -v taskset >/dev/null || pkg install util-linux
 ```
 
-- **SD 8 Gen 3** — P-cores are `cpu2–7`: `taskset -c 2-7 llama-cli-gpu -t 6 ...`
-- **SD 7+ Gen 3** — P-cores are `cpu3–7`: `taskset -c 3-7 llama-cli-gpu -t 5 ...`
+- **SD 8 Gen 3** — P-cores are `cpu2–7`: `taskset -c 2-7 llama-cli -t 6 ...`
+- **SD 7+ Gen 3** — P-cores are `cpu3–7`: `taskset -c 3-7 llama-cli -t 5 ...`
 
-## libomp.so (opencl variant)
+## libomp.so (gpu / cpu variants)
 
 Android doesn't ship `libomp.so`. The OpenCL build is OpenMP-threaded, so the
-installer places `libomp.so` in `~/llama.cpp-opencl/lib`, and the
-`llama-cli-gpu`/`llama-server-gpu` aliases' `LD_LIBRARY_PATH` makes it
-discoverable. The Hexagon build isn't OpenMP-threaded and doesn't need it.
+installer places `libomp.so` in `~/llama.cpp/gpu/lib` (the `cpu/` variant
+reuses it from there too), and sourcing `gpu/env.sh` or `cpu/env.sh` sets
+`LD_LIBRARY_PATH` so it's discoverable. The Hexagon build isn't
+OpenMP-threaded and doesn't need it.

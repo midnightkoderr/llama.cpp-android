@@ -1,11 +1,13 @@
 # llama.cpp for Snapdragon Android
 
 Prebuilt `llama-cli` / `llama-server` (and friends) for Android arm64-v8a,
-targeting **Snapdragon 8 Gen 3** and **7+ Gen 3**, in two variants, installed
-side by side:
+targeting **Snapdragon 8 Gen 3** and **7+ Gen 3**, installed side by side under
+one base dir:
 
-- **opencl** — CPU + OpenCL (Adreno GPU) — `~/llama.cpp-opencl/{bin,lib}`
-- **hexagon** — CPU + OpenCL + **Hexagon NPU (HTP)** — `~/llama.cpp-hexagon/{bin,lib}`
+- **gpu** — CPU + OpenCL (Adreno GPU) — `~/llama.cpp/gpu/{bin,lib}`
+- **npu** — CPU + OpenCL + **Hexagon NPU (HTP)** — `~/llama.cpp/npu/{bin,lib}`
+- **cpu** — CPU only, `~/llama.cpp/cpu/` — reuses the gpu build in CPU-only
+  mode (`-ngl 0`); no separate package needed
 
 Prebuilt archives are on the [Releases](../../releases) page (built
 automatically via GitHub Actions).
@@ -27,26 +29,31 @@ llama-install
 On plain `adb shell` (no Termux), run it via `bash ~/.local/bin/llama-install`
 instead — the saved script's shebang targets Termux's bash path.
 
-This installs both variants in one go. Add aliases so each variant's binaries
-pick up their own libraries automatically (the installer prints these exact
-lines after a successful install — copy them from there to get the real
-resolved paths; run this once, re-running duplicates the lines):
+This installs all three (gpu, npu, cpu) in one go, each with a `run.sh` and an
+`env.sh`. Quickest path — `run.sh <model.gguf> [llama-cli args...]` applies
+sensible per-variant defaults, no setup needed:
 
 ```bash
-cat >> ~/.alias <<'EOF'
-alias llama-cli-npu="LD_LIBRARY_PATH=${HOME}/llama.cpp-hexagon/lib ADSP_LIBRARY_PATH=${HOME}/llama.cpp-hexagon/lib ${HOME}/llama.cpp-hexagon/bin/llama-cli"
-alias llama-server-npu="LD_LIBRARY_PATH=${HOME}/llama.cpp-hexagon/lib ADSP_LIBRARY_PATH=${HOME}/llama.cpp-hexagon/lib ${HOME}/llama.cpp-hexagon/bin/llama-server"
-alias llama-cli-gpu="LD_LIBRARY_PATH=${HOME}/llama.cpp-opencl/lib ${HOME}/llama.cpp-opencl/bin/llama-cli"
-alias llama-server-gpu="LD_LIBRARY_PATH=${HOME}/llama.cpp-opencl/lib ${HOME}/llama.cpp-opencl/bin/llama-server"
-
-EOF
-
-. ~/.bashrc
+~/llama.cpp/npu/run.sh model-Q4_0.gguf -p "Hello"   # Hexagon NPU + GPU + CPU
+~/llama.cpp/gpu/run.sh model.gguf -p "Hello"        # OpenCL GPU + CPU
+~/llama.cpp/cpu/run.sh model.gguf -p "Hello"        # CPU only (reuses the gpu build)
 ```
 
-`llama-cli-npu`/`llama-server-npu` run the Hexagon NPU + GPU + CPU build;
-`llama-cli-gpu`/`llama-server-gpu` run the OpenCL GPU + CPU build. Both are
-always installed, so switching between them is just picking which alias to run.
+Defaults (thread count, context, NPU/GPU offload, `taskset` core pinning) are
+tunable via env vars — see [docs/USAGE.md](docs/USAGE.md) for per-SoC values.
+
+For manual flag control instead, `source` a variant's `env.sh` to put its
+tools on `PATH` for the current shell, then call `llama-cli`/`llama-server`
+directly:
+
+```bash
+source ~/llama.cpp/npu/env.sh
+llama-cli -m model-Q4_0.gguf --device HTP0 -ngl 99 -c 4096 -p "Hello"
+```
+
+Sourcing more than one variant's `env.sh` in the same shell just means
+whichever you source last wins on `PATH` — all three ship binaries with the
+same names.
 
 ## Uninstall
 
@@ -80,9 +87,6 @@ or
 curl -fsSL https://raw.githubusercontent.com/midnightkoderr/llama.cpp-android/main/install.sh | bash -s -- --uninstall --dry-run
 ```
 
-Then drop the `llama-*-npu` / `llama-*-gpu` alias lines (and the
-`. ~/.alias` line) from `~/.bashrc`.
-
 ## Update
 
 ```bash
@@ -113,9 +117,9 @@ Restores both variants' previous version from backup (one level kept each).
 
 ## Backup & Restore
 
-Zip both installs (+ your `~/.alias`) into a single portable archive — handy
-before wiping Termux, resetting the device, or moving to a new phone. Requires
-`zip`/`unzip` (`pkg install zip unzip` in Termux).
+Zip the whole install into a single portable archive — handy before wiping
+Termux, resetting the device, or moving to a new phone. Requires `zip`/`unzip`
+(`pkg install zip unzip` in Termux).
 
 ```bash
 llama-install --backup
@@ -133,19 +137,19 @@ Restore from a backup archive (works on a fresh install too):
 llama-install --restore ~/storage/shared/llama-cpp-backup.zip
 ```
 
-Note: this only covers the active installs and `~/.alias` — not the internal
+Note: this only covers the active install (`~/llama.cpp/`) — not the internal
 `--update`/`--revert` backups.
 
 ## Variants
 
-| | **opencl** | **hexagon** |
-|---|---|---|
-| Install path | `~/llama.cpp-opencl/` | `~/llama.cpp-hexagon/` |
-| Backends | CPU + OpenCL (Adreno GPU) | CPU + OpenCL + **Hexagon NPU (HTP)** |
-| Offload | `-ngl N` (GPU) | `--device HTP0 -ngl 99` (NPU) or `-ngl N` (GPU) |
-| Linking | static + `libomp.so` | shared `libggml-*.so` incl. HTP kernels |
-| Runtime env | `LD_LIBRARY_PATH` | `LD_LIBRARY_PATH` + `ADSP_LIBRARY_PATH` |
-| Footprint | small | larger (HTP kernels for every Hexagon version) |
+| | **gpu** | **npu** | **cpu** |
+|---|---|---|---|
+| Install path | `~/llama.cpp/gpu/` | `~/llama.cpp/npu/` | `~/llama.cpp/cpu/` |
+| Backends | CPU + OpenCL (Adreno GPU) | CPU + OpenCL + **Hexagon NPU (HTP)** | CPU only (reuses the gpu build) |
+| Offload | `-ngl N` (GPU) | `--device HTP0 -ngl 99` (NPU) or `-ngl N` (GPU) | none — `-ngl 0`, forced |
+| Linking | static + `libomp.so` | shared `libggml-*.so` incl. HTP kernels | static + `libomp.so` (shared with gpu) |
+| Runtime env | `LD_LIBRARY_PATH` | `LD_LIBRARY_PATH` + `ADSP_LIBRARY_PATH` | `LD_LIBRARY_PATH` |
+| Footprint | small | larger (HTP kernels for every Hexagon version) | none extra — no binaries of its own |
 
 | SoC | Model | GPU | NPU |
 |---|---|---|---|
