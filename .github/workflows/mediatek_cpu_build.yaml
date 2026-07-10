@@ -1,0 +1,78 @@
+name: Build llama.cpp Android (MediaTek CPU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'llama.cpp tag/branch to build (blank = latest upstream release)'
+        required: false
+        default: ''
+
+env:
+  NDK_REVISION: r26d # 26.3.11579264
+  ANDROID_ABI: arm64-v8a
+
+jobs:
+  mediatek-cpu:
+    name: arm64-v8a · MediaTek CPU (Armv8.2-a, no i8mm/bf16)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve llama.cpp tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ github.event.inputs.ref }}
+        run: |
+          if [[ -n "$INPUT_REF" ]]; then
+            tag="$INPUT_REF"
+          else
+            tag=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.tag_name')
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building llama.cpp @ $tag"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build git
+
+      - name: Set up Android NDK ${{ env.NDK_REVISION }}
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: ${{ env.NDK_REVISION }}
+          add-to-path: false
+
+      # Pre-clone at the exact tag so build.sh skips its own clone.
+      # mediatek-cpu/build.sh uses SRC_DIR=$PWD/llama.cpp (repo root).
+      - name: Clone llama.cpp at ${{ steps.resolve.outputs.tag }}
+        run: |
+          git clone --depth 1 --branch "${{ steps.resolve.outputs.tag }}" \
+            https://github.com/ggml-org/llama.cpp.git llama.cpp
+
+      - name: Build llama.cpp (MediaTek CPU)
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./mediatek-cpu/build.sh
+
+      - name: Pack archive
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          tar -C llama.cpp/android-bin-mtk \
+            -czf "llama-android-arm64-mediatek-cpu-${TAG}.tar.gz" .
+          sha256sum "llama-android-arm64-mediatek-cpu-${TAG}.tar.gz" \
+            > "llama-android-arm64-mediatek-cpu-${TAG}.tar.gz.sha256"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-arm64-mediatek-cpu-${{ steps.resolve.outputs.tag }}
+          path: |
+            llama-android-arm64-mediatek-cpu-${{ steps.resolve.outputs.tag }}.tar.gz
+            llama-android-arm64-mediatek-cpu-${{ steps.resolve.outputs.tag }}.tar.gz.sha256
+          retention-days: 30
+          if-no-files-found: error
