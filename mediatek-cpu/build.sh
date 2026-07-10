@@ -67,6 +67,7 @@ cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G Ninja \
   -DGGML_OPENMP=ON \
   -DGGML_LLAMAFILE=ON \
   -DGGML_NATIVE=OFF \
+  -DGGML_RPC=ON \
   -DCMAKE_C_FLAGS="$ARCH_FLAGS" \
   -DCMAKE_CXX_FLAGS="$ARCH_FLAGS" \
   -DCMAKE_EXE_LINKER_FLAGS="-flto=thin -Wl,--gc-sections -Wl,--strip-all" \
@@ -79,8 +80,10 @@ cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G Ninja \
   -DBUILD_TESTING=OFF \
   -DLLAMA_BUILD_TESTS=OFF
 
-# Same runtime tool set as the other variants.
-BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split)
+# Same runtime tool set as the other variants, plus ggml-rpc-server (GGML_RPC=ON
+# above also lets llama-cli/llama-server take --rpc host:port to offload to
+# a remote worker).
+BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split ggml-rpc-server)
 
 log "Building"
 ninja -C "$BUILD_DIR" -j"$(nproc)" "${BINS[@]}"

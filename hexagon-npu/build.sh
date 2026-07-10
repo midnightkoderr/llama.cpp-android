@@ -37,7 +37,9 @@ PULL=0
 # Runtime binaries to keep in the package; everything else (other tools,
 # headers, cmake/pkgconfig, leftover test binaries) is pruned. The required
 # .so closure is derived automatically from this list.
-KEEP_BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split)
+# ggml-rpc-server needs GGML_RPC=ON below; it also lets llama-cli/llama-server
+# take --rpc host:port to offload to a remote worker.
+KEEP_BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split ggml-rpc-server)
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
@@ -136,9 +138,10 @@ docker run --rm \
 
     cp docs/backend/snapdragon/CMakeUserPresets.json .
 
-    # Skip the test-* binaries (faster build, smaller package).
+    # Skip the test-* binaries (faster build, smaller package). GGML_RPC=ON
+    # builds ggml-rpc-server and lets llama-cli/llama-server take --rpc host:port.
     cmake --preset "$PRESET" -B "$BUILD" \
-      -DLLAMA_BUILD_TESTS=OFF -DBUILD_TESTING=OFF
+      -DLLAMA_BUILD_TESTS=OFF -DBUILD_TESTING=OFF -DGGML_RPC=ON
     cmake --build "$BUILD" -j "$JOBS"
 
     rm -rf "$PKG"
