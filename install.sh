@@ -151,7 +151,18 @@ source "${DIR}/env.sh" >/dev/null
 # with e.g. NGL=99 CTX=8192 ./run.sh model.gguf
 NGL="${NGL:-99}"
 CTX="${CTX:-4096}"
-exec llama-cli -m "${MODEL}" --device HTP0 -ngl "${NGL}" -c "${CTX}" "$@"
+UBATCH="${UBATCH:-256}"
+export GGML_HEXAGON_NDEV=1
+
+exec llama-cli -m "${MODEL_Q4_0}.gguf" \
+  --no-mmap \
+  --flash-attn auto \
+  --device HTP0 \
+  -ngl "${NGL}" \
+  -c "${CTX}" \
+  -ub "${UBATCH}" \
+  -b "${UBATCH}" \
+  "$@"
 RUNEOF
       ;;
     opencl)
@@ -170,9 +181,20 @@ NGL="${NGL:-28}"
 THREADS="${THREADS:-4}"
 CTX="${CTX:-4096}"
 if [[ -n "${CORES:-}" ]] && command -v taskset >/dev/null 2>&1; then
-  exec taskset -c "${CORES}" llama-cli -m "${MODEL}" -t "${THREADS}" -ngl "${NGL}" -c "${CTX}" "$@"
+  exec taskset -c "${CORES}" llama-cli \
+    -m "${MODEL}" \
+    --no-mmap \
+    --flash-attn auto \
+    -t "${THREADS}" \
+    -ngl "${NGL}" \
+    -c "${CTX}" "$@"
 fi
-exec llama-cli -m "${MODEL}" -t "${THREADS}" -ngl "${NGL}" -c "${CTX}" "$@"
+exec llama-cli -m "${MODEL}" \
+  -t "${THREADS}" \
+  --no-mmap \
+  --flash-attn auto \
+  -ngl "${NGL}" \
+  -c "${CTX}" "$@"
 RUNEOF
       ;;
     cpu)
@@ -190,9 +212,20 @@ source "${DIR}/env.sh" >/dev/null
 THREADS="${THREADS:-6}"
 CTX="${CTX:-2048}"
 if [[ -n "${CORES:-}" ]] && command -v taskset >/dev/null 2>&1; then
-  exec taskset -c "${CORES}" llama-cli -m "${MODEL}" -t "${THREADS}" -ngl 0 -c "${CTX}" "$@"
+  exec taskset -c "${CORES}" llama-cli \
+    -m "${MODEL}" \
+    --no-mmap \
+    --flash-attn auto \
+    -t "${THREADS}" \
+    -ngl 0 \
+    -c "${CTX}" "$@"
 fi
-exec llama-cli -m "${MODEL}" -t "${THREADS}" -ngl 0 -c "${CTX}" "$@"
+exec llama-cli -m "${MODEL}" \
+  -t "${THREADS}" \
+  --no-mmap \
+  --flash-attn auto \
+  -ngl 0 \
+  -c "${CTX}" "$@"
 RUNEOF
       ;;
   esac
