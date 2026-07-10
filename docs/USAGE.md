@@ -18,13 +18,14 @@ llama-install all    # everything (same as passing nothing)
 The same target also scopes `--update`, `--uninstall`, and `--revert` — e.g.
 `llama-install npu --update` updates only the npu install.
 
-Each installed variant has a `run.sh` that takes just a model path and
-applies sensible defaults — no env sourcing needed:
+Each installed variant has a `run.sh` that applies sensible defaults — no
+manual env sourcing needed. Set `MODEL_DIR` in that variant's `env.sh` to
+your `.gguf` folder; `run.sh` lists what's there and prompts you to pick one:
 
 ```bash
-~/llama.cpp/npu/run.sh model-Q4_0.gguf -p "Hello"
-~/llama.cpp/gpu/run.sh model.gguf -p "Hello"
-~/llama.cpp/cpu/run.sh model.gguf -p "Hello"
+~/llama.cpp/npu/run.sh -p "Hello"
+~/llama.cpp/gpu/run.sh -p "Hello"
+~/llama.cpp/cpu/run.sh -p "Hello"
 ```
 
 Defaults are tunable via env vars without editing anything — `NGL`, `CTX`,
@@ -32,7 +33,7 @@ Defaults are tunable via env vars without editing anything — `NGL`, `CTX`,
 per-SoC values used throughout the rest of this doc:
 
 ```bash
-CORES=2-7 THREADS=4 ~/llama.cpp/gpu/run.sh model.gguf -p "Hello"
+CORES=2-7 THREADS=4 ~/llama.cpp/gpu/run.sh -p "Hello"
 ```
 
 The rest of this doc covers those same flags manually. Source a variant's

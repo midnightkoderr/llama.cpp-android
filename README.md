@@ -40,14 +40,15 @@ llama-install cpu    # CPU-only build, no gpu/ — binaries land in cpu/ itself
 llama-install all    # everything (same as passing nothing)
 ```
 
-Each install gets its own `run.sh` and an `env.sh`. Quickest path —
-`run.sh <model.gguf> [llama-cli args...]` applies sensible per-variant
-defaults, no setup needed:
+Each install gets its own `run.sh` and an `env.sh`. Quickest path — set
+`MODEL_DIR` in a variant's `env.sh` to your `.gguf` folder, then
+`run.sh [llama-cli args...]` lists what's there, prompts you to pick one, and
+applies sensible per-variant defaults:
 
 ```bash
-~/llama.cpp/npu/run.sh model-Q4_0.gguf -p "Hello"   # Hexagon NPU + GPU + CPU
-~/llama.cpp/gpu/run.sh model.gguf -p "Hello"        # OpenCL GPU + CPU
-~/llama.cpp/cpu/run.sh model.gguf -p "Hello"        # CPU only (reuses the gpu build)
+~/llama.cpp/npu/run.sh -p "Hello"   # Hexagon NPU + GPU + CPU
+~/llama.cpp/gpu/run.sh -p "Hello"   # OpenCL GPU + CPU
+~/llama.cpp/cpu/run.sh -p "Hello"   # CPU only (reuses the gpu build)
 ```
 
 Defaults (thread count, context, NPU/GPU offload, `taskset` core pinning) are
