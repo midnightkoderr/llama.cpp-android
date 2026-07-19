@@ -104,6 +104,22 @@ vdir_for_variant() {
 
 backup_for() { printf '%s/.llama.cpp-bin-backup-%s' "${HOME}" "$1"; }
 
+# Copies each src file into destdir via write-then-rename instead of an
+# in-place overwrite. A plain `cp` onto a binary that's still running (e.g. a
+# background llama-server) fails with "Text file busy" (ETXTBSY) — rename
+# replaces the directory entry instead of writing through it, which the
+# kernel always allows even while the old inode is still executing.
+replace_into() {
+  local destdir="$1"; shift
+  local f base
+  for f in "$@"; do
+    [[ -f "${f}" ]] || continue
+    base="$(basename "${f}")"
+    cp "${f}" "${destdir}/.${base}.new"
+    mv -f "${destdir}/.${base}.new" "${destdir}/${base}"
+  done
+}
+
 # Writes an env.sh inside a dir. Source it (don't execute it) to put that
 # build's tools on PATH for the current shell — sourcing more than one in a
 # session just means whichever was sourced last wins on PATH, since they all
@@ -121,7 +137,7 @@ write_env_script() {
     else
       printf 'LLAMA_CPP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
     fi
-    printf 'export LD_LIBRARY_PATH="${LLAMA_CPP_DIR}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"\n'
+    printf 'export LD_LIBRARY_PATH="${LLAMA_CPP_DIR}/lib:/vendor/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"\n'
     if [[ "${variant}" == "hexagon" ]]; then
       printf 'export ADSP_LIBRARY_PATH="${LLAMA_CPP_DIR}/lib"\n'
     fi
@@ -413,9 +429,12 @@ if [[ "${REVERT}" == "1" ]]; then
     log "${VARIANT}: reverting to ${prev}"
 
     mkdir -p "${INSTALL_DIR}" "${LIB_DIR}"
-    cp "${BACKUP_DIR}"/bin/* "${INSTALL_DIR}/" 2>/dev/null || die "${VARIANT}: backup has no binaries"
-    cp "${BACKUP_DIR}"/lib/*.so "${LIB_DIR}/" 2>/dev/null || true
-    [[ -f "${BACKUP_DIR}/llama-cpp.version" ]] && cp "${BACKUP_DIR}/llama-cpp.version" "${LIB_DIR}/llama-cpp.version"
+    bins=( "${BACKUP_DIR}"/bin/* )
+    [[ ${#bins[@]} -gt 0 ]] || die "${VARIANT}: backup has no binaries"
+    replace_into "${INSTALL_DIR}" "${bins[@]}"
+    libs=( "${BACKUP_DIR}"/lib/*.so )
+    [[ ${#libs[@]} -gt 0 ]] && replace_into "${LIB_DIR}" "${libs[@]}"
+    [[ -f "${BACKUP_DIR}/llama-cpp.version" ]] && replace_into "${LIB_DIR}" "${BACKUP_DIR}/llama-cpp.version"
     chmod +x "${INSTALL_DIR}"/llama-* 2>/dev/null || true
 
     if [[ "${VARIANT}" == "opencl" && "${SELECT}" == "cpu" ]]; then
@@ -496,10 +515,10 @@ for VARIANT in "${VARIANTS[@]}"; do
 
   bins=( "${tmp}"/bin/llama-* )
   [[ ${#bins[@]} -gt 0 ]] || die "${VARIANT}: no llama-* binaries found in archive"
-  cp "${bins[@]}" "${INSTALL_DIR}/"
+  replace_into "${INSTALL_DIR}" "${bins[@]}"
 
   libs=( "${tmp}"/lib/*.so )
-  [[ ${#libs[@]} -gt 0 ]] && cp "${libs[@]}" "${LIB_DIR}/"
+  [[ ${#libs[@]} -gt 0 ]] && replace_into "${LIB_DIR}" "${libs[@]}"
 
   chmod +x "${INSTALL_DIR}"/llama-* 2>/dev/null || true
   printf '%s' "${tag}" > "${VERSION_FILE}"
