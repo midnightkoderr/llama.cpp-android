@@ -1,0 +1,66 @@
+name: Build llama.cpp Android (QNN SDK + Hexagon FastRPC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'llama-cpp-qnn-builder branch/tag/commit to build (blank = default branch)'
+        required: false
+        default: ''
+
+concurrency:
+  group: build-qnn-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qnn:
+    name: arm64-v8a · QNN SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Build (QNN SDK backend)
+        run: ./qnn-builder/build.sh --flavor qnn --tag "${{ github.event.inputs.ref }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-arm64-qnn-sdk
+          path: |
+            qnn-builder/llama-android-arm64-qnn-sdk*.tar.gz
+            qnn-builder/llama-android-arm64-qnn-sdk*.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  hexagon-fastrpc:
+    name: arm64-v8a · Hexagon NPU FastRPC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Build (Hexagon NPU FastRPC backend)
+        run: ./qnn-builder/build.sh --flavor hexagon --tag "${{ github.event.inputs.ref }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-arm64-qnn-hexagon-fastrpc
+          path: |
+            qnn-builder/llama-android-arm64-qnn-hexagon-fastrpc*.tar.gz
+            qnn-builder/llama-android-arm64-qnn-hexagon-fastrpc*.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
