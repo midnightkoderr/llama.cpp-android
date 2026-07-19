@@ -46,9 +46,18 @@ Build a specific `llama-cpp-qnn-builder` branch/tag/commit:
 ```
 
 Options: `--flavor <qnn|hexagon|both>` (default `both`), `--tag <ref>`,
-`--pull` (pull latest builder images first), `--clean` (clear this flavor's
-build output before building), `--clean-all` (also re-clone the source).
-Env overrides: `SRC_DIR`, `BUILDER_REPO`, `BUILDER_TAG`.
+`--pull` (pull latest builder images first), `--full` (keep every built tool
+— `test-backend-ops`, `lldb-server`/`gdbserver`, `sysMonApp`, all `llama-*`
+tools — default prunes to `llama-cli`, `llama-server`, `llama-bench`,
+`llama-quantize`, `llama-mtmd-cli`, `llama-gguf-split`), `--no-strip` (keep
+debug symbols), `--clean` (clear this flavor's build output before
+building), `--clean-all` (also re-clone the source). Env overrides:
+`SRC_DIR`, `BUILDER_REPO`, `BUILDER_TAG`.
+
+The upstream build ships every tool unstripped (several hundred MB); by
+default this script prunes to the runtime set above and strips symbols via
+`llvm-strip` from the same Docker image used to build, bringing each package
+down to a size comparable to this repo's other Termux packages.
 
 Output:
 

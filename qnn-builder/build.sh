@@ -21,6 +21,22 @@ FLAVOR="both"                    # qnn | hexagon | both
 PULL=0
 CLEAN=0
 CLEAN_ALL=0
+PRUNE=1
+DO_STRIP=1
+
+# Images used by chraac's docker-compose-compile-qnn.yml (--qnn-only) and
+# docker-compose-compile.yml (default, used for --hexagon-npu-only) — both
+# bundle the Android NDK, which is what we reuse below to strip the output.
+QNN_IMAGE="chraac/llama-cpp-qnn-builder:latest"
+HEXAGON_IMAGE="chraac/llama-cpp-qnn-hexagon-builder:latest"
+
+# Runtime tool set to keep; everything else the upstream build produces
+# (test-backend-ops, lldb-server/gdbserver, sysMonApp, and every other
+# llama-* tool) is pruned — same rationale as ../hexagon-npu/build.sh and
+# ../opencl-gpu/build.sh's KEEP_BINS. Shared libs (*.so) are always kept:
+# unlike those two builds we don't have an easy way to compute which .so
+# each tool needs, so all of them ship.
+KEEP_BINS=(llama-cli llama-server llama-bench llama-quantize llama-mtmd-cli llama-gguf-split)
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
@@ -33,6 +49,9 @@ Usage: $0 [options]
   --flavor <qnn|hexagon|both>  Which backend(s) to build (default: both)
   --tag <ref>                  Build a specific llama-cpp-qnn-builder branch/tag/commit (default: main)
   --pull                       docker pull the latest builder images before building
+  --full                       Keep every built tool (test-backend-ops, lldb-server/gdbserver,
+                                sysMonApp, all llama-* tools) — default prunes to a runtime set
+  --no-strip                   Keep debug symbols (do not strip binaries/libraries)
   --clean                      Remove this flavor's build output dir before building
   --clean-all                  Remove the cloned source (and build output), then re-clone
   -h, --help                   Show this help
@@ -52,6 +71,8 @@ while [[ $# -gt 0 ]]; do
     --tag)       BUILDER_TAG="$2"; shift 2 ;;
     --tag=*)     BUILDER_TAG="${1#*=}"; shift ;;
     --pull)      PULL=1; shift ;;
+    --full)      PRUNE=0; shift ;;
+    --no-strip)  DO_STRIP=0; shift ;;
     --clean)     CLEAN=1; shift ;;
     --clean-all) CLEAN_ALL=1; CLEAN=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -111,7 +132,7 @@ BUILD_OUT_DIR="$SRC_DIR/build_qnn_arm64-v8a"
 SUFFIX="${BUILDER_TAG:+-$BUILDER_TAG}"
 
 build_flavor() {
-  local flavor="$1" flags="$2" tarball_name="$3"
+  local flavor="$1" flags="$2" tarball_name="$3" image="$4"
 
   if [[ "$CLEAN" == "1" || -d "$BUILD_OUT_DIR" ]]; then
     log "[$flavor] Clearing stale output dir (avoids mixing with a prior flavor's build)"
@@ -128,6 +149,45 @@ build_flavor() {
   mkdir -p "$pkg_dir"
   cp -a "$BUILD_OUT_DIR/." "$pkg_dir/"
 
+  # The upstream build ships every llama-* tool plus test-backend-ops,
+  # lldb-server/gdbserver and sysMonApp, all unstripped — that's what makes
+  # the raw output several hundred MB. Prune + strip to match the size of
+  # this repo's other Termux packages.
+  if [[ "$PRUNE" == "1" ]]; then
+    log "[$flavor] Pruning to runtime tool set (use --full to keep everything)"
+    local keep="|"; local b
+    for b in "${KEEP_BINS[@]}"; do keep+="$b|"; done
+    for f in "$pkg_dir"/*; do
+      [[ -f "$f" ]] || continue
+      case "$(basename "$f")" in
+        *.so) continue ;;  # always keep shared libs
+      esac
+      [[ "$keep" == *"|$(basename "$f")|"* ]] || rm -f "$f"
+    done
+  fi
+
+  if [[ "$DO_STRIP" == "1" ]]; then
+    log "[$flavor] Stripping binaries/libraries via $image"
+    docker run --rm \
+      -u "$(id -u):$(id -g)" \
+      -v "$pkg_dir":/pkg \
+      "$image" \
+      bash -c '
+        STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+        if [ -x "$STRIP" ]; then
+          for f in /pkg/*; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.so) "$STRIP" --strip-unneeded "$f" 2>/dev/null || true ;;
+              *)    "$STRIP" --strip-all "$f" 2>/dev/null || true ;;
+            esac
+          done
+        else
+          echo "WARN: llvm-strip not found at $STRIP — skipping strip" >&2
+        fi
+      ' || warn "[$flavor] Strip step failed — keeping unstripped output"
+  fi
+
   local tarball="$PROJECT_ROOT/${tarball_name}${SUFFIX}.tar.gz"
   log "[$flavor] Packing $tarball"
   tar -C "$pkg_dir" -czf "$tarball" .
@@ -143,10 +203,10 @@ build_flavor() {
 for flavor in "${FLAVORS[@]}"; do
   case "$flavor" in
     qnn)
-      build_flavor qnn "--qnn-only --disable-ggml-hexagon" "llama-android-arm64-qnn-sdk"
+      build_flavor qnn "--qnn-only --disable-ggml-hexagon" "llama-android-arm64-qnn-sdk" "$QNN_IMAGE"
       ;;
     hexagon)
-      build_flavor hexagon "--hexagon-npu-only --enable-dequant --disable-ggml-hexagon" "llama-android-arm64-qnn-hexagon-fastrpc"
+      build_flavor hexagon "--hexagon-npu-only --enable-dequant --disable-ggml-hexagon" "llama-android-arm64-qnn-hexagon-fastrpc" "$HEXAGON_IMAGE"
       ;;
   esac
 done
